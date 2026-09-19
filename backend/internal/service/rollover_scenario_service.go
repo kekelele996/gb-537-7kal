@@ -18,6 +18,7 @@ import (
 
 type RolloverScenarioService struct {
 	scenarios    repository.RolloverScenarioRepository
+	signoffs     repository.ImpactSignoffRepository
 	anchors      repository.TrustAnchorRepository
 	chains       repository.CertificateChainRepository
 	services     repository.DependentServiceRepository
@@ -26,8 +27,8 @@ type RolloverScenarioService struct {
 	now          func() time.Time
 }
 
-func NewRolloverScenarioService(scenarios repository.RolloverScenarioRepository, anchors repository.TrustAnchorRepository, chains repository.CertificateChainRepository, services repository.DependentServiceRepository, audits repository.AuditRepository, transactions repository.TransactionManager) *RolloverScenarioService {
-	return &RolloverScenarioService{scenarios: scenarios, anchors: anchors, chains: chains, services: services, audits: audits, transactions: transactions, now: func() time.Time { return time.Now().UTC() }}
+func NewRolloverScenarioService(scenarios repository.RolloverScenarioRepository, signoffs repository.ImpactSignoffRepository, anchors repository.TrustAnchorRepository, chains repository.CertificateChainRepository, services repository.DependentServiceRepository, audits repository.AuditRepository, transactions repository.TransactionManager) *RolloverScenarioService {
+	return &RolloverScenarioService{scenarios: scenarios, signoffs: signoffs, anchors: anchors, chains: chains, services: services, audits: audits, transactions: transactions, now: func() time.Time { return time.Now().UTC() }}
 }
 
 func requireScenarioOwnership(actor util.Actor, scenario model.RolloverScenario) error {
@@ -202,12 +203,30 @@ func (s *RolloverScenarioService) Transition(ctx context.Context, id uint, reque
 	}
 	before := scenario
 	err = s.transactions.WithinTransaction(ctx, func(txCtx context.Context) error {
+		if to == constants.ScenarioVerified {
+			fresh, loadErr := s.scenarios.GetByID(txCtx, id, false)
+			if loadErr != nil {
+				return util.NotFound("rollover scenario")
+			}
+			signoffs, gateErr := s.signoffs.ListByScenario(txCtx, id)
+			if gateErr != nil {
+				return util.WrapError(http.StatusInternalServerError, util.CodeInternal, "unable to evaluate impact sign-off gate", gateErr)
+			}
+			if todos := evaluateSignoffGate(fresh, signoffs); len(todos) > 0 {
+				return util.NewDetailedError(http.StatusConflict, util.CodeSignoffGate, "critical impact sign-off gate is not satisfied", map[string]any{"todos": todos})
+			}
+		}
 		changed, transitionErr := s.scenarios.Transition(txCtx, id, scenario.ScenarioState, request.ToState, updates)
 		if transitionErr != nil {
 			return transitionErr
 		}
 		if !changed {
 			return util.NewError(http.StatusConflict, util.CodeConflict, "scenario state changed concurrently")
+		}
+		if to == constants.ScenarioVerified {
+			if applyErr := s.signoffs.MarkApplied(txCtx, id, s.now()); applyErr != nil {
+				return util.WrapError(http.StatusInternalServerError, util.CodeInternal, "unable to apply impact sign-offs", applyErr)
+			}
 		}
 		scenario.ScenarioState = request.ToState
 		if to == constants.ScenarioVerified {

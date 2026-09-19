@@ -15,6 +15,7 @@ Open `http://127.0.0.1:18537`. The application is decision support only: it does
 - Model service-to-service dependencies, trust references, ownership, environment, and criticality.
 - Freeze inputs for deterministic rollover simulation, with evidence for time-window path failures.
 - Require an independent reviewer before a scenario can move from `executing` to `verified`.
+- Gate every review on critical impact sign-off: each critical affected service from the simulation needs a reviewer disposition, and the historical replay must have passed.
 - Preserve request IDs, actor identity, before/after snapshots, hashes, algorithm version, and timing in audit records.
 
 ## Roles and demo accounts
@@ -48,7 +49,7 @@ The principal model is `TrustAnchor -> CertificateChain -> DependentService -> d
 | `/anchors` | `/trust-anchors`, `/certificate-chains` | Inspect trust-anchor fingerprints, validity, and chain references |
 | `/chains` | `/certificate-chains`, `/trust-anchors`, `/dependent-services` | Review chain structure and offline validation |
 | `/dependencies` | `/dependent-services`, `/certificate-chains` | Maintain dependency edges and find cycles |
-| `/rollovers` | `/rollover-scenarios` and all core resources | Run, compare, replay, and transition frozen simulations |
+| `/rollovers` | `/rollover-scenarios` and all core resources | Run, compare, replay, sign off critical impact, and transition frozen simulations |
 | `/audit` | `/audit-logs` and entity projections | Filter audit evidence by request, actor, entity, and time |
 
 Authentication is available through `POST /api/v1/auth/login`. All write endpoints produce an audit record. Simulation requests require an `Idempotency-Key`; repeated requests with the same key return the stored result.
@@ -68,6 +69,8 @@ Authentication is available through `POST /api/v1/auth/login`. All write endpoin
 - `frontend/src/types/enums/scenario-state.ts`, stores, state badges, and rollover page
 
 Valid scenario transitions are `draft -> simulated -> ready -> executing -> verified`, `executing -> rollback`, and `simulated/ready -> draft`. Invalid transitions return `409`; a creator attempting to verify their own scenario receives `409 REVIEWER_SEPARATION_REQUIRED`. Authorization failures return `403`, and unauthenticated requests return `401`.
+
+The review step is guarded by a critical impact sign-off gate. Every critical affected service listed by the simulation (`criticality = critical` in `affected_services_json`) needs a disposition note registered through `POST /api/v1/rollover-scenarios/:id/signoffs`; only reviewers holding `scenario.verify` may sign, the scenario creator is barred with `409 REVIEWER_SEPARATION_REQUIRED`, and the unique `(scenario_id, service_id)` index keeps only the latest registration per service. `GET /api/v1/rollover-scenarios/:id/signoffs` returns the required services, current sign-offs, and the outstanding todo list. When a sign-off is missing or the historical replay has not passed, the `executing -> verified` transition is rejected as a whole with `409 SIGNOFF_GATE_PENDING` and the todo list in `details.todos`. Once every todo clears, the sign-offs and the review conclusion take effect in a single transaction, and repeated or concurrent verify submissions succeed only once.
 
 ## Configuration and ports
 

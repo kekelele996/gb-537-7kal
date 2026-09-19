@@ -1,13 +1,14 @@
 import { AddRounded, ArrowForwardRounded, AutorenewRounded, FactCheckRounded, KeyboardArrowRightRounded, PlayArrowRounded, RefreshRounded, ReplayRounded, RouteRounded, ScienceRounded } from '@mui/icons-material'
 import { Alert, Box, Button, Checkbox, FormControl, IconButton, InputLabel, ListItemText, MenuItem, Select, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography } from '@mui/material'
 import { FormEvent, useEffect, useState } from 'react'
-import { errorMessage } from '../api/client'
+import { ApiError, errorMessage } from '../api/client'
 import { DependencyGraph } from '../components/common/DependencyGraph'
 import { EmptyState, ErrorState, LoadingState } from '../components/common/DataState'
 import { Fingerprint } from '../components/common/Fingerprint'
 import { FormDrawer } from '../components/common/FormDrawer'
 import { PageHeader } from '../components/common/PageHeader'
 import { ScenarioStateBadge } from '../components/common/ScenarioStateBadge'
+import { SignoffGatePanel } from '../components/common/SignoffGatePanel'
 import { StatStrip } from '../components/common/StatStrip'
 import { ValidationEvidenceDrawer } from '../components/common/ValidationEvidenceDrawer'
 import { useAuth } from '../hooks/useAuth'
@@ -16,6 +17,7 @@ import { useCertificateChainStore } from '../stores/certificate-chain'
 import { useDependentServiceStore } from '../stores/dependent-service'
 import { useRolloverScenarioStore } from '../stores/rollover-scenario'
 import { useTrustAnchorStore } from '../stores/trust-anchor'
+import type { SignoffTodo } from '../types/impact-signoff'
 import type { CreateRolloverScenarioInput, RolloverScenario } from '../types/rollover-scenario'
 import type { ScenarioState } from '../types/enums/scenario-state'
 import { formatDateTime, toLocalInput } from '../utils/date'
@@ -45,6 +47,7 @@ export function RolloversPage() {
   const [form, setForm] = useState<CreateRolloverScenarioInput>(defaultScenario)
   const [feedback, setFeedback] = useState('')
   const [success, setSuccess] = useState('')
+  const [gateRejection, setGateRejection] = useState<SignoffTodo[]>([])
   const [busy, setBusy] = useState(false)
 
   useEffect(() => { void fetchScenarios(); void fetchAnchors(); void fetchChains(); void fetchServices() }, [fetchAnchors, fetchChains, fetchScenarios, fetchServices])
@@ -71,9 +74,15 @@ export function RolloversPage() {
     catch (cause) { setFeedback(errorMessage(cause)) }
   }
   const transitionActive = async (to: ScenarioState) => {
-    if (!active) return; setBusy(true); setFeedback(''); setSuccess('')
+    if (!active) return; setBusy(true); setFeedback(''); setSuccess(''); setGateRejection([])
     try { const updated = await transition(active.id, to); setSuccess(`场景状态已更新为 ${updated.scenario_state}。`) }
-    catch (cause) { setFeedback(errorMessage(cause)) } finally { setBusy(false) }
+    catch (cause) {
+      if (cause instanceof ApiError && cause.code === 'SIGNOFF_GATE_PENDING') {
+        const todos = (cause.details as { todos?: SignoffTodo[] } | undefined)?.todos
+        if (Array.isArray(todos)) setGateRejection(todos)
+      }
+      setFeedback(errorMessage(cause))
+    } finally { setBusy(false) }
   }
   const replayActive = async () => {
     if (!active) return; setBusy(true); setFeedback(''); setSuccess('')
@@ -89,6 +98,7 @@ export function RolloversPage() {
     <PageHeader eyebrow="ROLLOVER REHEARSAL / FROZEN SNAPSHOTS" title="轮换推演" summary="在旧根、新根和交叠窗口的关键时间点重放服务信任路径。executing 仅记录演练步骤，不执行生产变更。" actions={<><Tooltip title="刷新"><IconButton onClick={() => fetchScenarios()} aria-label="刷新轮换推演"><RefreshRounded /></IconButton></Tooltip>{can('scenario.write') && <Button variant="contained" startIcon={<AddRounded />} onClick={openCreate}>新建冻结场景</Button>}</>} />
     <StatStrip items={[{ label: '场景总数', value: total }, { label: '待推演', value: items.filter((item) => item.scenario_state === 'draft').length }, { label: '断裂路径', value: items.reduce((sum, item) => sum + item.broken_paths_json.length, 0), tone: 'is-danger' }, { label: '已独立复核', value: items.filter((item) => item.scenario_state === 'verified').length, tone: 'is-good' }]} />
     {feedback && <Alert severity="error" onClose={() => setFeedback('')}>{feedback}</Alert>}{success && <Alert severity="success" onClose={() => setSuccess('')}>{success}</Alert>}{reviewerConflict && <Alert severity="warning">当前账号是场景创建者，不能复核自己的推演。请由独立安全复核员完成验证。</Alert>}
+    {!!gateRejection.length && <Alert severity="error" className="signoff-todos" onClose={() => setGateRejection([])}>复核被拒绝，请先完成待办：<ul>{gateRejection.map((todo, index) => <li key={`${todo.type}-${todo.service_id ?? index}`}>{todo.message}</li>)}</ul></Alert>}
     <Box className="scenario-layout">
       <section className="scenario-rail">
         <Box className="section-title compact"><Box><Typography className="eyebrow">SCENARIO REGISTER</Typography><Typography variant="h2">冻结场景</Typography></Box><span>{items.length}</span></Box>
@@ -108,6 +118,7 @@ export function RolloversPage() {
             {!!active.path_evidence_json.length && <Button variant="outlined" startIcon={<RouteRounded />} onClick={() => setEvidenceOpen(true)}>逐路径证据</Button>}
             {active.scenario_state === 'executing' && can('scenario.write') && <Button color="error" variant="text" startIcon={<AutorenewRounded />} onClick={() => transitionActive('rollback')}>记录回滚</Button>}
           </Box>
+          {active.scenario_state !== 'draft' && <SignoffGatePanel scenario={active} />}
           <Box className="rollover-lower-grid"><section><Box className="detail-section-head"><Typography variant="h3">服务可达性</Typography><span>{affectedIds?.length ?? 0} 受影响</span></Box><DependencyGraph services={services} highlightedIds={affectedIds} /></section><section><Box className="detail-section-head"><Typography variant="h3">断裂路径</Typography><span>{active.broken_paths_json.length}</span></Box><Box className="broken-paths">{active.broken_paths_json.map((path, index) => <Box key={`${path.at}-${index}`}><span>{formatDateTime(path.at)}</span><strong>{path.service_codes.join(' → ')}</strong><Typography>{path.reason}</Typography></Box>)}{!active.broken_paths_json.length && <Box className="no-broken-paths"><FactCheckRounded /><span>当前证据未发现断裂路径</span></Box>}</Box></section></Box>
         </> : <Box className="detail-placeholder"><Typography>选择一个冻结场景查看推演证据。</Typography></Box>}
       </section>

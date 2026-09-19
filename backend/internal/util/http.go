@@ -22,12 +22,14 @@ const (
 	CodeStateTransition  = "INVALID_STATE_TRANSITION"
 	CodeIdempotency      = "IDEMPOTENCY_CONFLICT"
 	CodeReviewerConflict = "REVIEWER_SEPARATION_REQUIRED"
+	CodeSignoffGate      = "SIGNOFF_GATE_PENDING"
 	CodeInternal         = "INTERNAL_ERROR"
 )
 
 type APIError struct {
 	Status        int
 	Code, Message string
+	Details       any
 	Cause         error
 }
 
@@ -41,6 +43,9 @@ func (e *APIError) Unwrap() error { return e.Cause }
 func NewError(status int, code, message string) *APIError {
 	return &APIError{Status: status, Code: code, Message: message}
 }
+func NewDetailedError(status int, code, message string, details any) *APIError {
+	return &APIError{Status: status, Code: code, Message: message, Details: details}
+}
 func WrapError(status int, code, message string, cause error) *APIError {
 	return &APIError{Status: status, Code: code, Message: message, Cause: cause}
 }
@@ -52,6 +57,7 @@ type Envelope struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
 	Data      any    `json:"data,omitempty"`
+	Details   any    `json:"details,omitempty"`
 	RequestID string `json:"request_id"`
 }
 
@@ -64,7 +70,7 @@ func Fail(c *gin.Context, err error) {
 		apiErr = WrapError(http.StatusInternalServerError, CodeInternal, "request could not be completed", err)
 	}
 	c.Error(apiErr)
-	c.AbortWithStatusJSON(apiErr.Status, Envelope{Code: apiErr.Code, Message: apiErr.Message, RequestID: RequestID(c)})
+	c.AbortWithStatusJSON(apiErr.Status, Envelope{Code: apiErr.Code, Message: apiErr.Message, Details: apiErr.Details, RequestID: RequestID(c)})
 }
 
 type Actor struct {

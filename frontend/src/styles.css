@@ -233,6 +233,22 @@ button, input, textarea, select { letter-spacing: 0; }
 .broken-paths p { margin-top: 4px; color: #725a57; font-size: .67rem; line-height: 1.45; }
 .broken-paths .no-broken-paths { display: flex; align-items: center; gap: 7px; border-color: #b8cec2; background: #e8f0eb; color: var(--green); font-size: .75rem; }
 
+.signoff-gate { margin-top: 4px; }
+.signoff-row { display: flex; align-items: flex-start; gap: 10px; margin-top: 8px; padding: 11px; border: 1px solid var(--mineral-3); }
+.signoff-row .MuiSvgIcon-root { flex: 0 0 auto; margin-top: 2px; font-size: 1.1rem; }
+.signoff-row > div { flex: 1 1 auto; min-width: 0; }
+.signoff-row strong { font-size: .75rem; }
+.signoff-row p { margin-top: 3px; color: #5d6a64; font-size: .68rem; line-height: 1.45; overflow-wrap: anywhere; }
+.signoff-row.is-todo { border-color: #d8c39a; background: #f8f3e8; }
+.signoff-row.is-pass { border-color: #b8cec2; background: #eef4f0; }
+.signoff-row .signoff-meta { color: #7d8a84; font-size: .62rem; }
+.signoff-form { display: flex; flex-direction: column; gap: 7px; margin-top: 8px; }
+.signoff-form .MuiButton-root { align-self: flex-start; }
+.signoff-empty { margin-top: 8px; color: #6f7b75; font-size: .7rem; }
+.signoff-todos { margin-top: 10px; }
+.signoff-todos ul { margin: 6px 0 0; padding-left: 18px; }
+.signoff-todos li { font-size: .72rem; line-height: 1.5; }
+
 .audit-register { border: 1px solid var(--mineral-3); background: var(--mineral-0); }
 .audit-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 15px; min-height: 67px; padding: 12px 15px; border-bottom: 1px solid var(--mineral-3); }
 .audit-toolbar > div { display: flex; align-items: center; gap: 8px; }
