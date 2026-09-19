@@ -8,6 +8,7 @@ export class ApiError extends Error {
     public readonly code: string,
     message: string,
     public readonly requestId = '',
+    public readonly details?: unknown,
   ) {
     super(message)
     this.name = 'ApiError'
@@ -44,7 +45,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
 
   if (!response.ok) {
     if (response.status === 401) window.dispatchEvent(new Event('certrollover:unauthorized'))
-    throw new ApiError(response.status, envelope.code ?? 'REQUEST_FAILED', envelope.message ?? '请求失败。', envelope.request_id)
+    throw new ApiError(response.status, envelope.code ?? 'REQUEST_FAILED', envelope.message ?? '请求失败。', envelope.request_id, envelope.details)
   }
   return envelope.data as T
 }

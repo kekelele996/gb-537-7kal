@@ -9,6 +9,7 @@ import { FormDrawer } from '../components/common/FormDrawer'
 import { PageHeader } from '../components/common/PageHeader'
 import { ScenarioStateBadge } from '../components/common/ScenarioStateBadge'
 import { StatStrip } from '../components/common/StatStrip'
+import { ToneBadge } from '../components/common/ToneBadge'
 import { ValidationEvidenceDrawer } from '../components/common/ValidationEvidenceDrawer'
 import { useAuth } from '../hooks/useAuth'
 import { useRolloverSimulation } from '../hooks/useRolloverSimulation'
@@ -34,7 +35,7 @@ const transitionCopy: Partial<Record<ScenarioState, { to: ScenarioState; label: 
 }
 
 export function RolloversPage() {
-  const { items, total, status, error, active, fetchScenarios, createScenario, transition, replay, select } = useRolloverScenarioStore()
+  const { items, total, status, error, active, gate, fetchScenarios, createScenario, transition, replay, fetchGate, registerSignoff, select } = useRolloverScenarioStore()
   const { items: anchors, fetchAnchors } = useTrustAnchorStore()
   const { items: chains, fetchChains } = useCertificateChainStore()
   const { items: services, fetchServices } = useDependentServiceStore()
@@ -46,9 +47,17 @@ export function RolloversPage() {
   const [feedback, setFeedback] = useState('')
   const [success, setSuccess] = useState('')
   const [busy, setBusy] = useState(false)
+  const [signoffNotes, setSignoffNotes] = useState<Record<number, string>>({})
+  const [signoffBusy, setSignoffBusy] = useState<number | null>(null)
 
   useEffect(() => { void fetchScenarios(); void fetchAnchors(); void fetchChains(); void fetchServices() }, [fetchAnchors, fetchChains, fetchScenarios, fetchServices])
   useEffect(() => { if (!active && items.length) select(items[0]) }, [active, items, select])
+  const activeId = active?.id
+  const activeState = active?.scenario_state
+  useEffect(() => {
+    if (!activeId || activeState === 'draft') return
+    fetchGate(activeId).catch(() => {})
+  }, [activeId, activeState, fetchGate])
   const affectedIds = active?.affected_services_json.map((item) => item.service_id ?? item.id).filter(Boolean) as number[] | undefined
 
   const openCreate = () => {
@@ -73,17 +82,28 @@ export function RolloversPage() {
   const transitionActive = async (to: ScenarioState) => {
     if (!active) return; setBusy(true); setFeedback(''); setSuccess('')
     try { const updated = await transition(active.id, to); setSuccess(`场景状态已更新为 ${updated.scenario_state}。`) }
-    catch (cause) { setFeedback(errorMessage(cause)) } finally { setBusy(false) }
+    catch (cause) { setFeedback(errorMessage(cause)); fetchGate(active.id).catch(() => {}) } finally { setBusy(false) }
   }
   const replayActive = async () => {
     if (!active) return; setBusy(true); setFeedback(''); setSuccess('')
     try { const updated = await replay(active.id); setSuccess(updated.replay_verified ? '重放结果与冻结历史证据一致。' : '重放结果不一致。') }
-    catch (cause) { setFeedback(errorMessage(cause)) } finally { setBusy(false) }
+    catch (cause) { setFeedback(errorMessage(cause)) }
+    finally { setBusy(false); fetchGate(active.id).catch(() => {}) }
+  }
+  const submitSignoff = async (serviceId: number) => {
+    if (!active) return; setSignoffBusy(serviceId); setFeedback(''); setSuccess('')
+    try {
+      const updated = await registerSignoff(active.id, serviceId, signoffNotes[serviceId] ?? '')
+      setSignoffNotes((current) => ({ ...current, [serviceId]: '' }))
+      setSuccess(updated.satisfied ? '处置签收已登记，复核闸门已全部满足。' : `处置签收已登记，仍有 ${updated.pending.length} 项待办。`)
+    } catch (cause) { setFeedback(errorMessage(cause)) } finally { setSignoffBusy(null) }
   }
 
   const next = active ? transitionCopy[active.scenario_state] : undefined
   const canAdvance = next && ((next.to === 'verified' && can('scenario.verify')) || (next.to !== 'verified' && can('scenario.write')))
   const reviewerConflict = active?.scenario_state === 'executing' && active.created_by === user?.user_id
+  const signoffOpen = !!active && ['simulated', 'ready', 'executing'].includes(active.scenario_state)
+  const canSignoff = signoffOpen && can('scenario.verify') && active?.created_by !== user?.user_id
 
   return <Box className="page-shell rollover-page">
     <PageHeader eyebrow="ROLLOVER REHEARSAL / FROZEN SNAPSHOTS" title="轮换推演" summary="在旧根、新根和交叠窗口的关键时间点重放服务信任路径。executing 仅记录演练步骤，不执行生产变更。" actions={<><Tooltip title="刷新"><IconButton onClick={() => fetchScenarios()} aria-label="刷新轮换推演"><RefreshRounded /></IconButton></Tooltip>{can('scenario.write') && <Button variant="contained" startIcon={<AddRounded />} onClick={openCreate}>新建冻结场景</Button>}</>} />
@@ -108,6 +128,28 @@ export function RolloversPage() {
             {!!active.path_evidence_json.length && <Button variant="outlined" startIcon={<RouteRounded />} onClick={() => setEvidenceOpen(true)}>逐路径证据</Button>}
             {active.scenario_state === 'executing' && can('scenario.write') && <Button color="error" variant="text" startIcon={<AutorenewRounded />} onClick={() => transitionActive('rollback')}>记录回滚</Button>}
           </Box>
+          {gate && active.scenario_state !== 'draft' && <Box className="review-gate">
+            <Box className="detail-section-head"><Typography variant="h3">关键影响签收闸门</Typography><span>{gate.satisfied ? '复核条件已全部满足' : `${gate.pending.length} 项待办`}</span></Box>
+            <Box className="gate-status-row">
+              <Box className={gate.replay_verified ? 'gate-check is-pass' : 'gate-check is-risk'}><Typography className="eyebrow">历史结果回放</Typography><strong>{gate.replay_verified ? '通过' : '未通过'}</strong></Box>
+              <Box className={gate.required.every((service) => gate.signoffs.some((signoff) => signoff.service_id === service.service_id)) ? 'gate-check is-pass' : 'gate-check is-risk'}><Typography className="eyebrow">关键服务签收</Typography><strong>{gate.signoffs.filter((signoff) => gate.required.some((service) => service.service_id === signoff.service_id)).length}/{gate.required.length}</strong></Box>
+            </Box>
+            {!!gate.required.length && <Box className="signoff-list">
+              {gate.required.map((service) => {
+                const serviceId = service.service_id ?? 0
+                const signoff = gate.signoffs.find((item) => item.service_id === serviceId)
+                return <Box className="signoff-row" key={serviceId}>
+                  <Box className="signoff-service"><strong>{service.service_code}</strong><ToneBadge value={service.criticality ?? 'critical'} /><span>{service.reason}</span></Box>
+                  {signoff ? <Box className="signoff-record"><Typography>{signoff.note}</Typography><span>{signoff.signed_by_name} 签收 · {formatDateTime(signoff.updated_at)}{signoff.locked_at ? ' · 已随复核结论锁定' : ''}</span></Box> : <Box className="signoff-record pending"><Typography>待安全复核员签收</Typography></Box>}
+                  {canSignoff && <Box className="signoff-editor">
+                    <TextField size="small" placeholder="登记处置说明，如同一服务重复登记只保留最新一次…" value={signoffNotes[serviceId] ?? ''} onChange={(event) => setSignoffNotes((current) => ({ ...current, [serviceId]: event.target.value }))} />
+                    <Button variant="outlined" disabled={signoffBusy === serviceId || !(signoffNotes[serviceId] ?? '').trim()} onClick={() => submitSignoff(serviceId)}>{signoffBusy === serviceId ? '登记中…' : signoff ? '更新签收' : '登记签收'}</Button>
+                  </Box>}
+                </Box>
+              })}
+            </Box>}
+            {!!gate.pending.length && <Box className="gate-todos">{gate.pending.map((todo, index) => <Alert severity="warning" key={`${todo.kind}-${todo.service_id ?? index}`}>{todo.kind === 'signoff' ? `待签收：${todo.service_code} 缺少处置说明` : '待办：历史结果回放未通过，复核整次拒绝'}</Alert>)}</Box>}
+          </Box>}
           <Box className="rollover-lower-grid"><section><Box className="detail-section-head"><Typography variant="h3">服务可达性</Typography><span>{affectedIds?.length ?? 0} 受影响</span></Box><DependencyGraph services={services} highlightedIds={affectedIds} /></section><section><Box className="detail-section-head"><Typography variant="h3">断裂路径</Typography><span>{active.broken_paths_json.length}</span></Box><Box className="broken-paths">{active.broken_paths_json.map((path, index) => <Box key={`${path.at}-${index}`}><span>{formatDateTime(path.at)}</span><strong>{path.service_codes.join(' → ')}</strong><Typography>{path.reason}</Typography></Box>)}{!active.broken_paths_json.length && <Box className="no-broken-paths"><FactCheckRounded /><span>当前证据未发现断裂路径</span></Box>}</Box></section></Box>
         </> : <Box className="detail-placeholder"><Typography>选择一个冻结场景查看推演证据。</Typography></Box>}
       </section>

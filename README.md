@@ -15,6 +15,7 @@ Open `http://127.0.0.1:18537`. The application is decision support only: it does
 - Model service-to-service dependencies, trust references, ownership, environment, and criticality.
 - Freeze inputs for deterministic rollover simulation, with evidence for time-window path failures.
 - Require an independent reviewer before a scenario can move from `executing` to `verified`.
+- Gate every review on critical-impact sign-offs: each critical affected service listed by the simulation needs a disposition note from a security reviewer, and the historical result replay must pass.
 - Preserve request IDs, actor identity, before/after snapshots, hashes, algorithm version, and timing in audit records.
 
 ## Roles and demo accounts
@@ -68,6 +69,14 @@ Authentication is available through `POST /api/v1/auth/login`. All write endpoin
 - `frontend/src/types/enums/scenario-state.ts`, stores, state badges, and rollover page
 
 Valid scenario transitions are `draft -> simulated -> ready -> executing -> verified`, `executing -> rollback`, and `simulated/ready -> draft`. Invalid transitions return `409`; a creator attempting to verify their own scenario receives `409 REVIEWER_SEPARATION_REQUIRED`. Authorization failures return `403`, and unauthenticated requests return `401`.
+
+## Review gate and sign-offs
+
+Before a scenario can move from `executing` to `verified`, every critical affected service from the simulation must carry a disposition sign-off and the historical result replay must still match the frozen evidence:
+
+- `GET /api/v1/rollover-scenarios/:id/signoffs` returns the review gate: required critical services, the latest sign-off per service, pending todos, replay status, and whether the gate is satisfied.
+- `PUT /api/v1/rollover-scenarios/:id/signoffs/:service_id` registers or replaces the disposition note for one critical affected service. It requires the `scenario.verify` permission, rejects the scenario creator with `409 REVIEWER_SEPARATION_REQUIRED`, keeps only the latest entry per service, and closes once the review concludes.
+- Verification evaluates the gate inside the same transaction as the state change: missing sign-offs or a failed replay reject the whole review with `409 REVIEW_GATE_PENDING` and a todo list; when satisfied, the sign-off set locks and the `verified` conclusion commits atomically, so repeated or concurrent submissions succeed only once.
 
 ## Configuration and ports
 

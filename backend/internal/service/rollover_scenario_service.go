@@ -21,13 +21,14 @@ type RolloverScenarioService struct {
 	anchors      repository.TrustAnchorRepository
 	chains       repository.CertificateChainRepository
 	services     repository.DependentServiceRepository
+	signoffs     repository.RolloverSignoffRepository
 	audits       repository.AuditRepository
 	transactions repository.TransactionManager
 	now          func() time.Time
 }
 
-func NewRolloverScenarioService(scenarios repository.RolloverScenarioRepository, anchors repository.TrustAnchorRepository, chains repository.CertificateChainRepository, services repository.DependentServiceRepository, audits repository.AuditRepository, transactions repository.TransactionManager) *RolloverScenarioService {
-	return &RolloverScenarioService{scenarios: scenarios, anchors: anchors, chains: chains, services: services, audits: audits, transactions: transactions, now: func() time.Time { return time.Now().UTC() }}
+func NewRolloverScenarioService(scenarios repository.RolloverScenarioRepository, anchors repository.TrustAnchorRepository, chains repository.CertificateChainRepository, services repository.DependentServiceRepository, signoffs repository.RolloverSignoffRepository, audits repository.AuditRepository, transactions repository.TransactionManager) *RolloverScenarioService {
+	return &RolloverScenarioService{scenarios: scenarios, anchors: anchors, chains: chains, services: services, signoffs: signoffs, audits: audits, transactions: transactions, now: func() time.Time { return time.Now().UTC() }}
 }
 
 func requireScenarioOwnership(actor util.Actor, scenario model.RolloverScenario) error {
@@ -194,8 +195,17 @@ func (s *RolloverScenarioService) Transition(ctx context.Context, id uint, reque
 	}
 	updates := map[string]any{}
 	if to == constants.ScenarioVerified {
+		gate, gateErr := s.evaluateReviewGate(ctx, scenario)
+		if gateErr != nil {
+			return dto.RolloverScenarioResponse{}, gateErr
+		}
+		if pending := gate.pending(); len(pending) > 0 {
+			response := dto.NewRolloverReviewGateResponse(scenario, gate.required, gate.signoffs, pending, gate.replayPassed)
+			return dto.RolloverScenarioResponse{}, util.DetailedError(http.StatusConflict, util.CodeReviewGate, "review gate is not satisfied: every critical affected service needs a disposition sign-off and the historical result replay must pass", response)
+		}
 		updates["verified_by"] = actor.UserID
 		updates["verified_by_name"] = actor.Username
+		updates["replay_verified"] = true
 	}
 	if to == constants.ScenarioRollback {
 		updates["rollback_record"] = strings.TrimSpace(request.Comment)
@@ -208,6 +218,12 @@ func (s *RolloverScenarioService) Transition(ctx context.Context, id uint, reque
 		}
 		if !changed {
 			return util.NewError(http.StatusConflict, util.CodeConflict, "scenario state changed concurrently")
+		}
+		if to == constants.ScenarioVerified {
+			if lockErr := s.signoffs.LockByScenario(txCtx, id, s.now()); lockErr != nil {
+				return util.WrapError(http.StatusInternalServerError, util.CodeInternal, "unable to lock review sign-offs", lockErr)
+			}
+			scenario.ReplayVerified = true
 		}
 		scenario.ScenarioState = request.ToState
 		if to == constants.ScenarioVerified {
@@ -235,25 +251,17 @@ func (s *RolloverScenarioService) Replay(ctx context.Context, id uint, actor uti
 	if scenario.ScenarioState == "draft" {
 		return dto.RolloverScenarioResponse{}, util.NewError(http.StatusConflict, util.CodeStateTransition, "draft scenario has no stored result to replay")
 	}
-	snapshot, err := algorithm.DecodeSnapshot(scenario.InputSnapshot)
-	if err != nil {
-		return dto.RolloverScenarioResponse{}, util.WrapError(http.StatusUnprocessableEntity, util.CodeValidation, "frozen scenario snapshot is invalid", err)
+	passed, replayErr := replayMatches(scenario)
+	if replayErr != nil {
+		return dto.RolloverScenarioResponse{}, util.WrapError(http.StatusUnprocessableEntity, util.CodeValidation, "scenario replay failed", replayErr)
 	}
-	result, err := algorithm.Simulate(snapshot)
-	if err != nil {
-		return dto.RolloverScenarioResponse{}, util.WrapError(http.StatusUnprocessableEntity, util.CodeValidation, "scenario replay failed", err)
-	}
-	affectedJSON, _ := encode(result.AffectedServices)
-	pathsJSON, _ := encode(result.BrokenPaths)
-	evidenceJSON, _ := encode(result.Evidence)
-	passed := affectedJSON == scenario.AffectedServicesJSON && pathsJSON == scenario.BrokenPathsJSON && evidenceJSON == scenario.PathEvidenceJSON && result.Explanation == scenario.Explanation
 	after := scenario
 	after.ReplayVerified = passed
 	err = s.transactions.WithinTransaction(ctx, func(txCtx context.Context) error {
 		if updateErr := s.scenarios.SetReplayVerified(txCtx, id, passed); updateErr != nil {
 			return util.WrapError(http.StatusInternalServerError, util.CodeInternal, "unable to store replay evidence", updateErr)
 		}
-		return recordAudit(txCtx, s.audits, actor, requestID, "rollover_scenario", id, "replay", scenario, after, scenario.InputHash, scenario.AlgorithmVersion, &scenario.SimulationTime, 0, result.Explanation)
+		return recordAudit(txCtx, s.audits, actor, requestID, "rollover_scenario", id, "replay", scenario, after, scenario.InputHash, scenario.AlgorithmVersion, &scenario.SimulationTime, 0, scenario.Explanation)
 	})
 	if err != nil {
 		return dto.RolloverScenarioResponse{}, err

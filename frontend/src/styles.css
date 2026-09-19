@@ -223,6 +223,30 @@ button, input, textarea, select { letter-spacing: 0; }
 .simulation-explanation .MuiSvgIcon-root { flex: 0 0 auto; font-size: 1.15rem; }
 .simulation-explanation p { font-size: .73rem; line-height: 1.5; }
 .scenario-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 15px; }
+.review-gate { margin-top: 16px; border: 1px solid var(--mineral-3); background: #fff; }
+.review-gate .detail-section-head { margin-top: 0; padding: 12px 14px 9px; }
+.review-gate .detail-section-head h3 { font-size: .95rem; }
+.gate-status-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--mineral-3); }
+.gate-check { min-width: 0; padding: 11px 14px; border-right: 1px solid var(--mineral-3); }
+.gate-check:last-child { border-right: 0; }
+.gate-check strong { display: block; margin-top: 4px; font-size: .9rem; }
+.gate-check.is-pass strong { color: var(--green); }
+.gate-check.is-risk strong { color: var(--red); }
+.signoff-list { border-top: 1px solid var(--mineral-3); }
+.signoff-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 12px; padding: 11px 14px; border-bottom: 1px solid var(--mineral-2); }
+.signoff-row:last-child { border-bottom: 0; }
+.signoff-service { min-width: 0; }
+.signoff-service strong { display: block; font-size: .78rem; overflow-wrap: anywhere; }
+.signoff-service .tone-badge { margin-top: 4px; }
+.signoff-service > span { display: block; margin-top: 5px; color: #6e7b74; font-size: .64rem; line-height: 1.45; }
+.signoff-record { min-width: 0; }
+.signoff-record p { font-size: .72rem; line-height: 1.5; overflow-wrap: anywhere; }
+.signoff-record > span { display: block; margin-top: 4px; color: #6e7b74; font-size: .62rem; }
+.signoff-record.pending p { color: var(--amber); font-weight: 650; }
+.signoff-editor { display: flex; grid-column: 1 / -1; gap: 8px; align-items: flex-start; }
+.signoff-editor .MuiTextField-root { flex: 1 1 auto; }
+.signoff-editor .MuiButton-root { flex: 0 0 auto; }
+.gate-todos { display: flex; flex-direction: column; gap: 8px; padding: 11px 14px; border-top: 1px solid var(--mineral-3); }
 .rollover-lower-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(310px, .9fr); gap: 23px; margin-top: 24px; }
 .rollover-lower-grid .dependency-graph { grid-template-columns: 1fr; }
 .broken-paths { display: flex; flex-direction: column; gap: 8px; }

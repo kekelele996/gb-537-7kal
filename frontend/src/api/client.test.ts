@@ -25,4 +25,11 @@ describe('apiRequest', () => {
     vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('socket details'))
     await expect(apiRequest('/trust-anchors')).rejects.toMatchObject({ code: 'NETWORK_UNAVAILABLE', message: '无法连接服务，请检查网络或服务状态。' })
   })
+
+  it('carries error details such as review gate todos', async () => {
+    const details = { pending: [{ kind: 'signoff', service_id: 3, service_code: 'PAYMENTS-API', message: 'missing disposition sign-off' }], satisfied: false }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ code: 'REVIEW_GATE_PENDING', message: 'review gate is not satisfied', details, request_id: 'req-gate' }), { status: 409, headers: { 'Content-Type': 'application/json' } }))
+
+    await expect(apiRequest('/rollover-scenarios/9/transition', { method: 'POST' })).rejects.toMatchObject({ status: 409, code: 'REVIEW_GATE_PENDING', details })
+  })
 })
